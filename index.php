@@ -1,91 +1,131 @@
 <?php
-
-// Function to parse a single log line
-function parseLogLine($logLine) {
-    $pattern = '/\[(?<date>\d{2}-\w{3}-\d{4} \d{2}:\d{2}:\d{2} \w+\/\w+)\] PHP (?<type>\w+):\s+(?<message>.*) in (?<file>.*) on line (?<line>\d+)/';
-    if (preg_match($pattern, $logLine, $matches)) {
-        return [
-            'date' => $matches['date'],
-            'type' => $matches['type'],
-            'message' => $matches['message'],
-            'file' => $matches['file'],
-            'line' => $matches['line']
-        ];
+// Function to read and filter the log file
+function readErrorLog($logFile, $search = '', $errorType = '', $startDate = '', $endDate = '', $page = 1, $perPage = 50) {
+    if (!file_exists($logFile)) {
+        return ['error' => 'Log file not found.'];
     }
-    return null; // Return null if the line does not match the pattern
-}
 
-// Function to load and parse the entire log file
-function loadLogFile($filePath) {
-    $logs = [];
-    $file = fopen($filePath, 'r');
-    if ($file) {
-        while (($line = fgets($file)) !== false) {
-            $parsedLog = parseLogLine($line);
-            if ($parsedLog) {
-                $logs[] = $parsedLog;
+    $logs = file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!$logs) {
+        return ['error' => 'Unable to read the log file.'];
+    }
+
+    // Initialize an array to store the filtered logs
+    $filteredLogs = [];
+
+    foreach ($logs as $log) {
+        // Filter by date range (if specified)
+        if ($startDate && $endDate) {
+            preg_match('/(\d{4}-\d{2}-\d{2})/', $log, $matches);
+            $logDate = $matches[0] ?? '';
+            if ($logDate && ($logDate < $startDate || $logDate > $endDate)) {
+                continue;
             }
         }
-        fclose($file);
+
+        // Filter by error type (if specified)
+        if ($errorType && stripos($log, $errorType) === false) {
+            continue;
+        }
+
+        // Filter by keyword (if specified)
+        if ($search && stripos($log, $search) === false) {
+            continue;
+        }
+
+        // Add log to filtered array
+        $filteredLogs[] = $log;
     }
-    return $logs;
+
+    // Pagination: Slice the logs array to get the logs for the current page
+    $totalLogs = count($filteredLogs);
+    $totalPages = ceil($totalLogs / $perPage);
+    $startIndex = ($page - 1) * $perPage;
+    $paginatedLogs = array_slice($filteredLogs, $startIndex, $perPage);
+
+    return [
+        'logs' => $paginatedLogs,
+        'totalLogs' => $totalLogs,
+        'totalPages' => $totalPages,
+        'currentPage' => $page
+    ];
 }
 
-// Function to filter logs by a keyword in the message
-function searchLogs($logs, $keyword) {
-    return array_filter($logs, function($log) use ($keyword) {
-        return stripos($log['message'], $keyword) !== false;
-    });
-}
+// Define default variables (You may want to fetch these from user input or a form)
+$logFile = '/home/username/logs/error_log'; // Path to your error log
+$search = isset($_GET['search']) ? $_GET['search'] : '';
+$errorType = isset($_GET['errorType']) ? $_GET['errorType'] : '';
+$startDate = isset($_GET['startDate']) ? $_GET['startDate'] : '';
+$endDate = isset($_GET['endDate']) ? $_GET['endDate'] : '';
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$perPage = 50; // Logs per page
 
-// Function to filter logs by error type
-function filterLogsByType($logs, $type) {
-    return array_filter($logs, function($log) use ($type) {
-        return strcasecmp($log['type'], $type) === 0;
-    });
-}
+// Read and filter logs
+$logData = readErrorLog($logFile, $search, $errorType, $startDate, $endDate, $page, $perPage);
+?>
 
-// Function to filter logs by a date range
-function filterLogsByDateRange($logs, $startDate, $endDate) {
-    return array_filter($logs, function($log) use ($startDate, $endDate) {
-        $logDate = DateTime::createFromFormat('d-M-Y H:i:s e', $log['date']);
-        return $logDate >= $startDate && $logDate <= $endDate;
-    });
-}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PHP cPanel Error Log Reader</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .log-entry { border-bottom: 1px solid #ccc; padding: 5px 0; }
+        .log-header { font-weight: bold; }
+        .pagination { text-align: center; margin-top: 20px; }
+        .pagination a { padding: 5px 10px; text-decoration: none; color: #000; border: 1px solid #ddd; margin: 0 3px; }
+        .pagination a.active { background-color: #007bff; color: white; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>PHP cPanel Error Log Reader</h1>
 
-// Main code to execute the log reader
-$filePath = '/path/to/cpanel/error_log'; // Update with the path to your log file
-$logs = loadLogFile($filePath);
+    <!-- Search Form -->
+    <form method="get" action="">
+        <div>
+            <label for="search">Search for Keywords:</label>
+            <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" />
+        </div>
+        <div>
+            <label for="errorType">Filter by Error Type:</label>
+            <select name="errorType">
+                <option value="">All</option>
+                <option value="Fatal error" <?php echo ($errorType == 'Fatal error') ? 'selected' : ''; ?>>Fatal error</option>
+                <option value="Warning" <?php echo ($errorType == 'Warning') ? 'selected' : ''; ?>>Warning</option>
+                <option value="Notice" <?php echo ($errorType == 'Notice') ? 'selected' : ''; ?>>Notice</option>
+            </select>
+        </div>
+        <div>
+            <label for="startDate">Start Date (YYYY-MM-DD):</label>
+            <input type="date" name="startDate" value="<?php echo htmlspecialchars($startDate); ?>" />
+        </div>
+        <div>
+            <label for="endDate">End Date (YYYY-MM-DD):</label>
+            <input type="date" name="endDate" value="<?php echo htmlspecialchars($endDate); ?>" />
+        </div>
+        <div>
+            <button type="submit">Filter Logs</button>
+        </div>
+    </form>
 
-echo "Total logs loaded: " . count($logs) . "\n";
+    <!-- Display Logs -->
+    <div class="logs">
+        <?php if (isset($logData['error'])): ?>
+            <p><?php echo $logData['error']; ?></p>
+        <?php else: ?>
+            <?php foreach ($logData['logs'] as $log): ?>
+                <div class="log-entry">
+                    <div class="log-header"><?php echo $log; ?></div>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
+    </div>
 
-// Example: Search for logs containing a specific keyword
-$keyword = 'Undefined variable'; // Set your search keyword
-$searchResults = searchLogs($logs, $keyword);
-echo "Logs containing '$keyword':\n";
-printLogs($searchResults);
-
-// Example: Filter by error type (e.g., "Warning" or "Error")
-$type = 'Warning';
-$typeFilteredLogs = filterLogsByType($logs, $type);
-echo "Logs of type '$type':\n";
-printLogs($typeFilteredLogs);
-
-// Example: Filter by date range
-$startDate = new DateTime('10-Nov-2024 00:00:00 Asia/Jakarta');
-$endDate = new DateTime('10-Nov-2024 23:59:59 Asia/Jakarta');
-$dateFilteredLogs = filterLogsByDateRange($logs, $startDate, $endDate);
-echo "Logs from {$startDate->format('d-M-Y')} to {$endDate->format('d-M-Y')}:\n";
-printLogs($dateFilteredLogs);
-
-// Function to print logs in a readable format
-function printLogs($logs) {
-    foreach ($logs as $log) {
-        echo "Date: " . $log['date'] . "\n";
-        echo "Type: " . $log['type'] . "\n";
-        echo "Message: " . $log['message'] . "\n";
-        echo "File: " . $log['file'] . "\n";
-        echo "Line: " . $log['line'] . "\n";
-        echo str_repeat("-", 50) . "\n";
-    }
-}
+    <!-- Pagination -->
+    <div class="pagination">
+        <?php for ($i = 1; $i <= $logData['totalPages']; $i++): ?>
+            <a href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&errorType=<?php echo urlencode($errorType); ?>&startDate=<?php echo urlencode($startDate); ?>&endDate=<?php echo u
